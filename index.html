@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 GPIO 設定與狀態</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .status-indicator {
+      display: inline-block;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background-color: gray;
+      vertical-align: middle;
+    }
+    .status-on {
+      background-color: #28a745; /* 綠色 */
+    }
+    .status-off {
+      background-color: #dc3545; /* 紅色 */
+    }
+  </style>
+</head>
+<body class="bg-light">
+
+<div class="container my-5">
+  <div class="card shadow">
+    <div class="card-header bg-primary text-white">
+      <h4 class="mb-0">ESP32 GPIO 設定面板</h4>
+    </div>
+    <div class="card-body">
+      <form id="gpioForm" class="row g-3">
+        <!-- 動態生成 GPIO 設定列 -->
+      </form>
+      <div class="mt-4">
+        <button class="btn btn-success" onclick="sendConfig()">送出設定</button>
+      </div>
+      <hr>
+      <h5>ESP32 回傳訊息：</h5>
+      <pre id="esp32Response" class="bg-light p-3 border rounded">尚未收到資料</pre>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script>
+  const gpioPins = [2, 4, 5, 12, 13, 14, 15, 18, 19, 21];
+  const form = document.getElementById("gpioForm");
+
+  // 動態建立 GPIO 設定列與狀態燈
+  gpioPins.forEach(pin => {
+    const col = document.createElement("div");
+    col.className = "col-md-6";
+
+    const div = document.createElement("div");
+    div.className = "form-group d-flex align-items-center";
+
+    const label = document.createElement("label");
+    label.textContent = `GPIO ${pin} 模式：`;
+    label.className = "form-label me-2";
+
+    const select = document.createElement("select");
+    select.id = `gpio-${pin}`;
+    select.className = "form-select me-2";
+    ["INPUT", "OUTPUT"].forEach(mode => {
+      const option = document.createElement("option");
+      option.value = mode;
+      option.text = mode;
+      select.appendChild(option);
+    });
+
+    const status = document.createElement("span");
+    status.id = `status-${pin}`;
+    status.className = "status-indicator";
+
+    div.appendChild(label);
+    div.appendChild(select);
+    div.appendChild(status);
+    col.appendChild(div);
+    form.appendChild(col);
+  });
+
+  // MQTT 設定
+  const client = mqtt.connect("wss://broker.mqttgo.io:8084/mqtt");
+  client.on("connect", () => {
+    console.log("✅ MQTT 已連線");
+    client.subscribe("esp32/response");
+    client.subscribe("esp32/status"); // 新增訂閱 GPIO 狀態主題
+  });
+
+  client.on("message", (topic, message) => {
+    if (topic === "esp32/response") {
+      document.getElementById("esp32Response").textContent = message.toString();
+    } else if (topic === "esp32/status") {
+      updateStatusLeds(JSON.parse(message.toString()));
+    }
+  });
+
+  function sendConfig() {
+    const config = gpioPins.map(pin => {
+      const mode = document.getElementById(`gpio-${pin}`).value;
+      return { pin: pin, mode: mode };
+    });
+    const json = JSON.stringify(config);
+    client.publish("esp32/gpio_config", json);
+  }
+
+  function updateStatusLeds(statusArray) {
+    statusArray.forEach(item => {
+      const el = document.getElementById(`status-${item.pin}`);
+      if (!el) return;
+      el.classList.remove("status-on", "status-off");
+      el.classList.add(item.state === 1 ? "status-on" : "status-off");
+    });
+  }
+</script>
+
+</body>
+</html>
