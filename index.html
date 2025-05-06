@@ -2,177 +2,119 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
-  <title>ESP32 IO 控制系統</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 GPIO 設定與狀態</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     .status-indicator {
       display: inline-block;
-      width: 20px;
-      height: 20px;
+      width: 15px;
+      height: 15px;
       border-radius: 50%;
       background-color: gray;
+      vertical-align: middle;
+    }
+    .status-on {
+      background-color: #28a745; /* 綠色 */
+    }
+    .status-off {
+      background-color: #dc3545; /* 紅色 */
     }
   </style>
 </head>
 <body class="bg-light">
-  <div class="container py-4">
-    <h3 class="mb-4">ESP32 控制介面</h3>
-    <ul class="nav nav-tabs" id="tabMenu">
-      <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#settings">設定</a></li>
-      <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#control">控制</a></li>
-    </ul>
 
-    <div class="tab-content mt-3">
-      <!-- 設定頁面 -->
-      <div class="tab-pane fade show active" id="settings">
-        <table class="table table-bordered text-center">
-          <thead class="table-light">
-            <tr><th>#</th><th>GPIO</th><th>模式</th></tr>
-          </thead>
-          <tbody id="settingsTable"></tbody>
-        </table>
-        <button class="btn btn-primary" onclick="saveSettings()">儲存設定</button>
+<div class="container my-5">
+  <div class="card shadow">
+    <div class="card-header bg-primary text-white">
+      <h4 class="mb-0">ESP32 GPIO 設定面板</h4>
+    </div>
+    <div class="card-body">
+      <form id="gpioForm" class="row g-3">
+        <!-- 動態生成 GPIO 設定列 -->
+      </form>
+      <div class="mt-4">
+        <button class="btn btn-success" onclick="sendConfig()">送出設定</button>
       </div>
-
-      <!-- 控制頁面 -->
-      <div class="tab-pane fade" id="control">
-        <table class="table table-bordered text-center">
-          <thead class="table-light">
-            <tr><th>#</th><th>GPIO</th><th>名稱</th><th>控制</th><th>狀態</th></tr>
-          </thead>
-          <tbody id="controlTable"></tbody>
-        </table>
-      </div>
+      <hr>
+      <h5>ESP32 回傳訊息：</h5>
+      <pre id="esp32Response" class="bg-light p-3 border rounded">尚未收到資料</pre>
     </div>
   </div>
+</div>
 
-  <script>
-    const pinList = [2, 4, 5, 12, 13, 14, 15, 18, 19, 21];
-    let pinModes = {};
-    let pinStates = {};
-    let pinNames = {};
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script>
+  const gpioPins = [2, 4, 5, 12, 13, 14, 15, 18, 19, 21];
+  const form = document.getElementById("gpioForm");
 
-    // 初始化 MQTT
-    const client = mqtt.connect("wss://broker.mqttgo.io:8084/mqtt");
+  // 動態建立 GPIO 設定列與狀態燈
+  gpioPins.forEach(pin => {
+    const col = document.createElement("div");
+    col.className = "col-md-6";
 
-    client.on("connect", () => {
-      console.log("MQTT Connected");
-      client.subscribe("esp32/config");
-      client.subscribe("esp32/status");
-      client.publish("esp32/init", "request");  // 啟動請求
+    const div = document.createElement("div");
+    div.className = "form-group d-flex align-items-center";
+
+    const label = document.createElement("label");
+    label.textContent = `GPIO ${pin} 模式：`;
+    label.className = "form-label me-2";
+
+    const select = document.createElement("select");
+    select.id = `gpio-${pin}`;
+    select.className = "form-select me-2";
+    ["INPUT", "OUTPUT"].forEach(mode => {
+      const option = document.createElement("option");
+      option.value = mode;
+      option.text = mode;
+      select.appendChild(option);
     });
 
-    client.on("message", (topic, message) => {
-      const data = JSON.parse(message.toString());
+    const status = document.createElement("span");
+    status.id = `status-${pin}`;
+    status.className = "status-indicator";
 
-      if (topic === "esp32/config") {
-        data.forEach(item => {
-          pinModes[item.pin] = item.mode;
-          pinNames[item.pin] = item.name || `IO${pinList.indexOf(item.pin) + 1}`;
-        });
-        renderSettings();
-        renderControl();
-      }
+    div.appendChild(label);
+    div.appendChild(select);
+    div.appendChild(status);
+    col.appendChild(div);
+    form.appendChild(col);
+  });
 
-      if (topic === "esp32/status") {
-        data.forEach(item => {
-          pinStates[item.pin] = item.state;
-        });
-        updateControlUI();
-      }
+  // MQTT 設定
+  const client = mqtt.connect("wss://broker.mqttgo.io:8084/mqtt");
+  client.on("connect", () => {
+    console.log("✅ MQTT 已連線");
+    client.subscribe("esp32/response");
+    client.subscribe("esp32/status"); // 新增訂閱 GPIO 狀態主題
+  });
+
+  client.on("message", (topic, message) => {
+    if (topic === "esp32/response") {
+      document.getElementById("esp32Response").textContent = message.toString();
+    } else if (topic === "esp32/status") {
+      updateStatusLeds(JSON.parse(message.toString()));
+    }
+  });
+
+  function sendConfig() {
+    const config = gpioPins.map(pin => {
+      const mode = document.getElementById(`gpio-${pin}`).value;
+      return { pin: pin, mode: mode };
     });
+    const json = JSON.stringify(config);
+    client.publish("esp32/gpio_config", json);
+  }
 
-    function renderSettings() {
-      const table = document.getElementById("settingsTable");
-      table.innerHTML = "";
-      pinList.forEach((pin, i) => {
-        const row = document.createElement("tr");
-        row.innerHTML = `
-          <td>${i + 1}</td>
-          <td>GPIO${pin}</td>
-          <td>
-            <select class="form-select form-select-sm mode-select" data-pin="${pin}">
-              <option value="INPUT" ${pinModes[pin] === 'INPUT' ? 'selected' : ''}>INPUT</option>
-              <option value="OUTPUT" ${pinModes[pin] === 'OUTPUT' ? 'selected' : ''}>OUTPUT</option>
-            </select>
-          </td>
-        `;
-        table.appendChild(row);
-      });
-    }
-
-    function renderControl() {
-      const table = document.getElementById("controlTable");
-      table.innerHTML = "";
-      pinList.forEach((pin, i) => {
-        const row = document.createElement("tr");
-        row.innerHTML = `
-          <td>${i + 1}</td>
-          <td>GPIO${pin}</td>
-          <td><input class="form-control form-control-sm name-input" data-pin="${pin}" value="${pinNames[pin] || ''}"></td>
-          <td>
-            <div class="form-check form-switch">
-              <input class="form-check-input output-toggle" type="checkbox" data-pin="${pin}">
-            </div>
-          </td>
-          <td><span class="status-indicator" id="led-${pin}"></span></td>
-        `;
-        table.appendChild(row);
-      });
-      updateControlUI();
-    }
-
-    function updateControlUI() {
-      pinList.forEach(pin => {
-        const mode = pinModes[pin];
-        const state = pinStates[pin];
-
-        const toggle = document.querySelector(`.output-toggle[data-pin='${pin}']`);
-        const led = document.getElementById(`led-${pin}`);
-
-        if (toggle) {
-          if (mode === 'OUTPUT') {
-            toggle.disabled = false;
-            toggle.checked = state === 1;
-          } else {
-            toggle.disabled = true;
-          }
-        }
-
-        if (led) {
-          led.style.backgroundColor = (state === 1) ? 'gold' : 'gray';
-        }
-      });
-    }
-
-    // 切換輸出狀態
-    document.addEventListener("change", (e) => {
-      if (e.target.classList.contains("output-toggle")) {
-        const pin = parseInt(e.target.dataset.pin);
-        const state = e.target.checked ? 1 : 0;
-        client.publish("esp32/control", JSON.stringify({ pin, state }));
-      }
-
-      if (e.target.classList.contains("name-input")) {
-        const pin = parseInt(e.target.dataset.pin);
-        pinNames[pin] = e.target.value;
-      }
+  function updateStatusLeds(statusArray) {
+    statusArray.forEach(item => {
+      const el = document.getElementById(`status-${item.pin}`);
+      if (!el) return;
+      el.classList.remove("status-on", "status-off");
+      el.classList.add(item.state === 1 ? "status-on" : "status-off");
     });
+  }
+</script>
 
-    // 儲存設定
-    function saveSettings() {
-      const data = [];
-      document.querySelectorAll(".mode-select").forEach(sel => {
-        const pin = parseInt(sel.dataset.pin);
-        const mode = sel.value;
-        data.push({ pin, mode, name: pinNames[pin] || "" });
-      });
-      client.publish("esp32/config", JSON.stringify(data));
-      alert("設定已送出至 ESP32");
-    }
-  </script>
-
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
